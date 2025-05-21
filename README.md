@@ -1,98 +1,137 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 钱包签名认证问题解决方案
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## 根本原因分析
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+从您提供的日志中，我发现了两个主要问题：
 
-## Description
+1. **最新的401错误原因：nonce提取失败**
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+   ```
+   [Nest] 17377  - 2025/05/21 17:38:03   DEBUG [AuthService] 从消息中提取的nonce: 0
+   [Nest] 17377  - 2025/05/21 17:38:03    WARN [AuthService] 未找到对应的nonce: 0
+   ```
 
-## Project setup
+   当前的正则表达式在处理`0x`前缀的十六进制nonce时只提取了第一个字符"0"，导致nonce验证失败。
 
-```bash
-$ pnpm install
+2. **控制器调用错误的验证方法**
+   ```typescript
+   @Post('simple-verify')
+   async verifySimpleSignature(...) {
+     // 错误：调用verifySignature而不是verifySimpleSignature
+     const result = await this.authService.verifySignature(message, signature, address);
+     // ...
+   }
+   ```
+   虽然您已经实现了`verifySimpleSignature`方法，但控制器仍在调用`verifySignature`方法。
+
+## 完整解决方案
+
+### 1. 修复nonce提取正则表达式
+
+在`auth.service.ts`中更新提取nonce的方法：
+
+```typescript
+private extractNonceFromMessage(message: string): string | null {
+  try {
+    // 更新正则表达式，正确匹配0x开头的十六进制nonce
+    const nonceMatch = message.match(/Nonce: (0x[a-f0-9]+|[a-f0-9]+)/i);
+    if (nonceMatch && nonceMatch[1]) {
+      this.logger.debug(`提取到的原始nonce字符串: '${nonceMatch[1]}'`);
+      return nonceMatch[1];
+    }
+    return null;
+  } catch (error) {
+    this.logger.error(`提取nonce失败: ${error.message}`);
+    return null;
+  }
+}
+
+// 同样修复简单消息的nonce提取
+private extractNonceFromSimpleMessage(message: string): string | null {
+  try {
+    const nonceMatch = message.match(/Nonce: (0x[a-f0-9]+|[a-f0-9]+)/i);
+    if (nonceMatch && nonceMatch[1]) {
+      this.logger.debug(`提取到的原始nonce字符串: '${nonceMatch[1]}'`);
+      return nonceMatch[1];
+    }
+    return null;
+  } catch (error) {
+    this.logger.error(`从简单消息提取nonce失败: ${error.message}`);
+    return null;
+  }
+}
 ```
 
-## Compile and run the project
+### 2. 确保控制器使用正确的验证方法
 
-```bash
-# development
-$ pnpm run start
+在`auth.controller.ts`中修改`simple-verify`路由：
 
-# watch mode
-$ pnpm run start:dev
+```typescript
+@Post('simple-verify')
+async verifySimpleSignature(
+  @Body() body: { message: string; signature: string; address: string },
+) {
+  this.logger.debug(`收到简化验证请求: ${JSON.stringify(body, null, 2)}`);
 
-# production mode
-$ pnpm run start:prod
+  const { message, signature, address } = body;
+
+  // 参数验证...
+
+  this.logger.debug('开始简化签名验证...');
+
+  // 修正：使用正确的verifySimpleSignature方法
+  const result = await this.authService.verifySimpleSignature(
+    message,
+    signature,
+    address,
+  );
+
+  // 结果处理...
+}
 ```
 
-## Run tests
+### 3. 强化前端日志记录
 
-```bash
-# unit tests
-$ pnpm run test
+在前端的`AuthContext.tsx`中添加更多日志：
 
-# e2e tests
-$ pnpm run test:e2e
+```typescript
+const createSimpleSignMessage = async (address: string) => {
+  const nonce = await fetchNonce();
+  console.log('获取到的nonce:', nonce); // 确认nonce格式
 
-# test coverage
-$ pnpm run test:cov
+  // 创建消息...
+  const message = `Sign this message to authenticate with ${domain}.\n\nAddress: ${address}\nNonce: ${nonce}\nTimestamp: ${new Date().toISOString()}`;
+
+  console.log('创建的简单消息:', message);
+  return message;
+};
+
+const login = async () => {
+  // ...
+
+  // 添加更多日志以便调试
+  console.log(
+    '发送到后端的数据:',
+    JSON.stringify(
+      {
+        message,
+        signature,
+        address: normalizedAddress,
+      },
+      null,
+      2,
+    ),
+  );
+
+  // ...
+};
 ```
 
-## Deployment
+## 关键修复点总结
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+1. **正则表达式处理**：修改正则表达式以正确匹配带有`0x`前缀的十六进制nonce
+2. **方法调用一致性**：确保控制器调用正确的验证方法
+3. **日志增强**：添加更详细的日志记录，特别是在nonce提取和处理阶段
+4. **错误处理完善**：添加更清晰的错误消息，便于调试
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+通过这些修改，您的钱包签名认证系统应该能够正常工作了。重启前后端服务后测试，您应该能够成功通过钱包签名完成认证流程。
