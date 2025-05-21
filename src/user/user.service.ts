@@ -1,55 +1,39 @@
 import { Injectable } from '@nestjs/common';
-
-// 这里使用内存存储用户信息，实际应用中应该使用数据库
-interface User {
-  id: string;
-  address: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from './entities/user.entity';
 
 @Injectable()
 export class UserService {
-  private users: Map<string, User> = new Map();
+  constructor(
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
+  ) {}
 
-  findUserByAddress(address: string): Promise<User | undefined> {
+  async findUserByAddress(address: string): Promise<User | null> {
     address = address.toLowerCase();
-
-    for (const user of this.users.values()) {
-      if (user.address.toLowerCase() === address) {
-        return Promise.resolve(user);
-      }
-    }
-
-    return Promise.resolve(undefined);
+    return this.userRepository.findOne({ where: { address } });
   }
 
-  findUserById(id: string): Promise<User | undefined> {
-    return Promise.resolve(this.users.get(id));
+  async findUserById(id: string): Promise<User | null> {
+    return this.userRepository.findOne({ where: { id } });
   }
 
   async findOrCreateUser(address: string): Promise<User> {
     address = address.toLowerCase();
 
     // 查找现有用户
-    const existingUser = await this.findUserByAddress(address);
-    if (existingUser) {
-      // 更新最后访问时间
-      existingUser.updatedAt = new Date();
-      this.users.set(existingUser.id, existingUser);
-      return existingUser;
+    let user = await this.findUserByAddress(address);
+
+    // 如果用户不存在，创建新用户
+    if (!user) {
+      user = this.userRepository.create({
+        address,
+        isActive: true,
+      });
+      await this.userRepository.save(user);
     }
 
-    // 创建新用户
-    const now = new Date();
-    const newUser: User = {
-      id: Math.random().toString(36).substr(2, 9), // 简单的ID生成，实际应用中应使用UUID
-      address,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.users.set(newUser.id, newUser);
-    return newUser;
+    return user;
   }
 }

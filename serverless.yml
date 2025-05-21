@@ -1,0 +1,28 @@
+# 服务名称：基于无服务器架构的web3身份验证系统
+service: serverless-web3-auth
+
+provider:
+  name: aws                                # 云服务提供商: AWS
+  region: ap-northeast-1                   # 区域设置: 东京
+  runtime: nodejs20.x                      # 运行环境: Node.js 20.x版本
+  architecture: arm64                      # 处理器架构: ARM64 (更经济高效)
+  stage: ${opt:stage,'staging'}            # 部署环境: 默认为staging环境
+  environment:
+    JWT_SECRET: ${env:JWT_SECRET, 'your-default-secret-key'}
+    JWT_EXPIRATION: ${env:JWT_EXPIRATION, '24h'}
+
+  ecr:
+    images:
+      serverlessWeb3Auth:
+        # https://docs.aws.amazon.com/lambda/latest/dg/foundation-arch.html
+        # 映像平台: Linux ARM64架构
+        platform: linux/arm64
+        # Docker镜像构建路径: 当前目录
+        path: ./
+
+functions:
+  api:
+    url: true                              # 启用API网关URL
+    image:
+      name: serverlessWeb3Auth             # 使用上面定义的容器镜像
+    timeout: 30                            # 函数超时时间: 30秒

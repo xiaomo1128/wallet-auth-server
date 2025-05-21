@@ -1,47 +1,57 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Inject } from '@nestjs/common';
+import { Cache } from 'cache-manager';
+import { ethers } from 'ethers';
 import { JwtService } from '@nestjs/jwt';
 import { UserService } from '../user/user.service';
-import { ethers } from 'ethers';
+import { InjectRepository } from '@nestjs/typeorm';
+import { LoginHistory } from '../user/entities/login-history.entity';
+import { User } from '../user/entities/user.entity';
+import { Repository } from 'typeorm';
 
 @Injectable()
 export class AuthService {
-  private nonces: Map<string, { nonce: string; expires: Date }> = new Map();
   private readonly logger = new Logger(AuthService.name);
+  private readonly NONCE_PREFIX = 'nonce:';
+  private readonly NONCE_EXPIRY = 300; // 5分钟（秒）
 
   constructor(
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private jwtService: JwtService,
     private userService: UserService,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
+    @InjectRepository(LoginHistory)
+    private loginHistoryRepository: Repository<LoginHistory>,
   ) {}
 
-  generateNonce(): string {
+  async generateNonce(): Promise<string> {
     const nonce = ethers.hexlify(ethers.randomBytes(16));
-    const expires = new Date(Date.now() + 1000 * 60 * 5); // 5分钟有效期
-
     this.logger.debug(`生成新nonce: ${nonce}`);
 
-    // 存储nonce
-    this.nonces.set(nonce, { nonce, expires });
-
-    // 清理过期的nonces
-    this.cleanExpiredNonces();
+    // 存储nonce到Redis，设置5分钟过期时间
+    await this.cacheManager.set(
+      this.NONCE_PREFIX + nonce,
+      true,
+      this.NONCE_EXPIRY * 1000,
+    );
 
     return nonce;
   }
 
-  private cleanExpiredNonces() {
-    const now = new Date();
-    let expiredCount = 0;
+  // 验证nonce是否有效并删除
+  private async validateAndRemoveNonce(nonce: string): Promise<boolean> {
+    const key = this.NONCE_PREFIX + nonce;
+    const exists = await this.cacheManager.get(key);
 
-    for (const [key, value] of this.nonces.entries()) {
-      if (value.expires < now) {
-        this.nonces.delete(key);
-        expiredCount++;
-      }
+    if (exists) {
+      // 使用后立即删除nonce
+      await this.cacheManager.del(key);
+      return true;
     }
 
-    if (expiredCount > 0) {
-      this.logger.debug(`清理了 ${expiredCount} 个过期nonce`);
-    }
+    return false;
   }
 
   // 从简单消息中提取 nonce
@@ -67,6 +77,8 @@ export class AuthService {
     message: string,
     signature: string,
     address: string,
+    ipAddress?: string,
+    userAgent?: string,
   ): Promise<{
     success: boolean;
     data?: {
@@ -89,15 +101,10 @@ export class AuthService {
       }
 
       // 验证nonce
-      const storedNonce = this.nonces.get(extractedNonce);
-      if (!storedNonce) {
-        this.logger.warn(`未找到对应的nonce: ${extractedNonce}`);
-        return { success: false, error: 'Invalid nonce' };
-      }
-
-      if (storedNonce.expires < new Date()) {
-        this.logger.warn(`nonce已过期: ${extractedNonce}`);
-        return { success: false, error: 'Expired nonce' };
+      const nonceValid = await this.validateAndRemoveNonce(extractedNonce);
+      if (!nonceValid) {
+        this.logger.warn(`nonce无效或已过期: ${extractedNonce}`);
+        return { success: false, error: 'Invalid or expired nonce' };
       }
 
       // 使用ethers直接验证签名
@@ -113,29 +120,40 @@ export class AuthService {
       }
 
       // 验证地址
-      if (recoveredAddress.toLowerCase() !== address.toLowerCase()) {
-        this.logger.warn(`地址不匹配: ${recoveredAddress} vs ${address}`);
+      if (recoveredAddress.toLowerCase() === address.toLowerCase()) {
+        // 处理用户和令牌
+        const user = await this.userService.findOrCreateUser(address);
+
+        // 记录成功登录
+        await this.recordLogin(user.id, true, ipAddress, userAgent);
+
+        const token = this.jwtService.sign({
+          sub: user.id,
+          address: user.address,
+        });
+
+        return {
+          success: true,
+          data: {
+            token,
+            address: user.address,
+          },
+        };
+      } else {
+        // 记录失败登录尝试
+        const user = await this.userService.findUserByAddress(address);
+        if (user) {
+          await this.recordLogin(
+            user.id,
+            false,
+            ipAddress,
+            userAgent,
+            'Address mismatch',
+          );
+        }
+
         return { success: false, error: 'Address mismatch' };
       }
-
-      // 删除已使用的nonce
-      this.nonces.delete(extractedNonce);
-
-      // 处理用户和令牌
-      const user = await this.userService.findOrCreateUser(address);
-
-      const token = this.jwtService.sign({
-        sub: user.id,
-        address: user.address,
-      });
-
-      return {
-        success: true,
-        data: {
-          token,
-          address: user.address,
-        },
-      };
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
@@ -145,5 +163,38 @@ export class AuthService {
         error: errorMessage || '验证过程中发生错误',
       };
     }
+  }
+
+  // 记录登录历史
+  async recordLogin(
+    userId: string,
+    success: boolean,
+    ipAddress?: string,
+    userAgent?: string,
+    failureReason?: string,
+  ): Promise<LoginHistory> {
+    // 记录登录历史
+    const loginRecord = this.loginHistoryRepository.create({
+      userId,
+      ipAddress,
+      userAgent,
+      success,
+      failureReason,
+    });
+
+    await this.loginHistoryRepository.save(loginRecord);
+
+    // 如果登录成功，更新用户的登录计数和最后登录时间
+    if (success) {
+      await this.userRepository.update(
+        { id: userId },
+        {
+          lastLoginAt: new Date(),
+          loginCount: () => 'login_count + 1',
+        },
+      );
+    }
+
+    return loginRecord;
   }
 }
