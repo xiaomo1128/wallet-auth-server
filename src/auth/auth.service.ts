@@ -1,11 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { SiweMessage } from 'siwe';
 import { UserService } from '../user/user.service';
+import { ethers } from 'ethers';
 
 @Injectable()
 export class AuthService {
   private nonces: Map<string, { nonce: string; expires: Date }> = new Map();
+  private readonly logger = new Logger(AuthService.name);
 
   constructor(
     private jwtService: JwtService,
@@ -13,14 +14,10 @@ export class AuthService {
   ) {}
 
   generateNonce(): string {
-    // 生成随机字符串作为nonce
-    const randomStr =
-      Math.random().toString(36).substring(2, 15) +
-      Math.random().toString(36).substring(2, 15) +
-      Date.now().toString(36);
-
-    const nonce = randomStr;
+    const nonce = ethers.hexlify(ethers.randomBytes(16));
     const expires = new Date(Date.now() + 1000 * 60 * 5); // 5分钟有效期
+
+    this.logger.debug(`生成新nonce: ${nonce}`);
 
     // 存储nonce
     this.nonces.set(nonce, { nonce, expires });
@@ -33,52 +30,100 @@ export class AuthService {
 
   private cleanExpiredNonces() {
     const now = new Date();
+    let expiredCount = 0;
+
     for (const [key, value] of this.nonces.entries()) {
       if (value.expires < now) {
         this.nonces.delete(key);
+        expiredCount++;
       }
+    }
+
+    if (expiredCount > 0) {
+      this.logger.debug(`清理了 ${expiredCount} 个过期nonce`);
     }
   }
 
+  // 从简单消息中提取 nonce
+  private extractNonceFromMessage(message: string): string | null {
+    try {
+      // 更新正则表达式，正确匹配0x开头的十六进制nonce
+      const nonceMatch = message.match(/Nonce: (0x[a-f0-9]+|[a-f0-9]+)/i);
+      if (nonceMatch && nonceMatch[1]) {
+        this.logger.debug(`提取到的原始nonce字符串: '${nonceMatch[1]}'`);
+        return nonceMatch[1];
+      }
+      return null;
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`从简单消息提取nonce失败: ${errorMessage}`);
+      return null;
+    }
+  }
+
+  // 验证简单签名
   async verifySignature(
     message: string,
     signature: string,
     address: string,
-  ): Promise<{ success: boolean; data?: any; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    data?: {
+      token: string;
+      address: string;
+    };
+    error?: string;
+  }> {
     try {
-      const siweMessage = new SiweMessage(message);
+      this.logger.debug(`开始验证简单签名...`);
+      this.logger.debug(`收到的消息: ${message}`);
+      this.logger.debug(`收到的签名: ${signature}`);
+      this.logger.debug(`声明的地址: ${address}`);
 
-      // 验证nonce是否存在且未过期
-      const storedNonce = this.nonces.get(siweMessage.nonce);
-      if (!storedNonce || storedNonce.expires < new Date()) {
-        return { success: false, error: 'Invalid or expired nonce' };
+      // 从消息中提取nonce
+      const extractedNonce = this.extractNonceFromMessage(message);
+      if (!extractedNonce) {
+        this.logger.error('无法从消息中提取nonce');
+        return { success: false, error: '无法从消息中提取nonce' };
       }
 
-      // 验证签名
-      const { success, data, error } = await this.verifySiweMessage(
-        siweMessage,
-        signature,
-      );
-
-      if (!success || !data) {
-        return { success: false, error: error || 'Verification failed' };
+      // 验证nonce
+      const storedNonce = this.nonces.get(extractedNonce);
+      if (!storedNonce) {
+        this.logger.warn(`未找到对应的nonce: ${extractedNonce}`);
+        return { success: false, error: 'Invalid nonce' };
       }
 
-      // 验证地址是否匹配
-      if (
-        typeof data.address !== 'string' ||
-        data.address.toLowerCase() !== address.toLowerCase()
-      ) {
+      if (storedNonce.expires < new Date()) {
+        this.logger.warn(`nonce已过期: ${extractedNonce}`);
+        return { success: false, error: 'Expired nonce' };
+      }
+
+      // 使用ethers直接验证签名
+      let recoveredAddress: string;
+      try {
+        recoveredAddress = ethers.verifyMessage(message, signature);
+        this.logger.debug(`恢复的地址: ${recoveredAddress}`);
+      } catch (err: unknown) {
+        const errorMessage =
+          err instanceof Error ? err.message : 'Unknown error';
+        this.logger.error(`验证签名失败: ${errorMessage}`);
+        return { success: false, error: `验证签名失败: ${errorMessage}` };
+      }
+
+      // 验证地址
+      if (recoveredAddress.toLowerCase() !== address.toLowerCase()) {
+        this.logger.warn(`地址不匹配: ${recoveredAddress} vs ${address}`);
         return { success: false, error: 'Address mismatch' };
       }
 
-      // 删除使用过的nonce
-      this.nonces.delete(siweMessage.nonce);
+      // 删除已使用的nonce
+      this.nonces.delete(extractedNonce);
 
-      // 查找或创建用户
+      // 处理用户和令牌
       const user = await this.userService.findOrCreateUser(address);
 
-      // 生成JWT令牌
       const token = this.jwtService.sign({
         sub: user.id,
         address: user.address,
@@ -93,26 +138,12 @@ export class AuthService {
       };
     } catch (error: unknown) {
       const errorMessage =
-        error instanceof Error
-          ? error.message
-          : 'An error occurred during verification';
+        error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`验证过程中发生错误: ${errorMessage}`);
       return {
         success: false,
-        error: errorMessage,
+        error: errorMessage || '验证过程中发生错误',
       };
-    }
-  }
-  private async verifySiweMessage(
-    message: SiweMessage,
-    signature: string,
-  ): Promise<{ success: boolean; data?: Record<string, any>; error?: string }> {
-    try {
-      const data = await message.verify({ signature });
-      return { success: true, data };
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error occurred';
-      return { success: false, error: errorMessage };
     }
   }
 }
