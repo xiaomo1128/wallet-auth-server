@@ -26,32 +26,62 @@ export class AuthService {
     private loginHistoryRepository: Repository<LoginHistory>,
   ) {}
 
-  async generateNonce(): Promise<string> {
+  // 为特定地址生成绑定的 nonce
+  async generateNonce(address?: string): Promise<string> {
     const nonce = ethers.hexlify(ethers.randomBytes(16));
-    this.logger.debug(`生成新nonce: ${nonce}`);
+    this.logger.debug(
+      `生成新nonce: ${nonce}, 绑定地址: ${address || '未绑定'}`,
+    );
+
+    // 创建存储对象，包含地址信息（如果提供）
+    const nonceData = {
+      nonce,
+      address: address?.toLowerCase() || null,
+      createdAt: Date.now(),
+    };
 
     // 存储nonce到Redis，设置5分钟过期时间
     await this.cacheManager.set(
       this.NONCE_PREFIX + nonce,
-      true,
+      nonceData,
       this.NONCE_EXPIRY * 1000,
     );
 
     return nonce;
   }
 
-  // 验证nonce是否有效并删除
-  private async validateAndRemoveNonce(nonce: string): Promise<boolean> {
+  // 验证nonce时检查地址绑定
+  private async validateAndRemoveNonce(
+    nonce: string,
+    expectedAddress: string,
+  ): Promise<boolean> {
     const key = this.NONCE_PREFIX + nonce;
-    const exists = await this.cacheManager.get(key);
+    const nonceData = await this.cacheManager.get<{
+      nonce: string;
+      address: string | null;
+      createdAt: number;
+    }>(key);
 
-    if (exists) {
-      // 使用后立即删除nonce
-      await this.cacheManager.del(key);
-      return true;
+    if (!nonceData) {
+      this.logger.warn(`Nonce 不存在或已过期: ${nonce}`);
+      return false;
     }
 
-    return false;
+    // 如果 nonce 绑定了地址，则验证地址匹配
+    if (
+      nonceData.address &&
+      nonceData.address !== expectedAddress.toLowerCase()
+    ) {
+      this.logger.warn(
+        `Nonce 地址不匹配: 期望 ${expectedAddress.toLowerCase()}, 实际 ${nonceData.address}`,
+      );
+      return false;
+    }
+
+    // 验证通过，删除nonce
+    await this.cacheManager.del(key);
+    this.logger.debug(`Nonce 验证成功并已删除: ${nonce}`);
+    return true;
   }
 
   // 从简单消息中提取 nonce
@@ -72,7 +102,7 @@ export class AuthService {
     }
   }
 
-  // 验证简单签名
+  // 验证签名时传入地址进行 nonce 绑定检查
   async verifySignature(
     message: string,
     signature: string,
@@ -100,11 +130,17 @@ export class AuthService {
         return { success: false, error: '无法从消息中提取nonce' };
       }
 
-      // 验证nonce
-      const nonceValid = await this.validateAndRemoveNonce(extractedNonce);
+      // 验证nonce时检查地址绑定
+      const nonceValid = await this.validateAndRemoveNonce(
+        extractedNonce,
+        address,
+      );
       if (!nonceValid) {
-        this.logger.warn(`nonce无效或已过期: ${extractedNonce}`);
-        return { success: false, error: 'Invalid or expired nonce' };
+        this.logger.warn(`nonce无效、已过期或地址不匹配: ${extractedNonce}`);
+        return {
+          success: false,
+          error: 'Invalid, expired, or mismatched nonce',
+        };
       }
 
       // 使用ethers直接验证签名
