@@ -23,7 +23,7 @@ import { redisStore } from 'cache-manager-redis-store';
         port: configService.get('DB_PORT', 5432),
         username: configService.get('DB_USERNAME', 'rainxl'),
         // password: configService.get('DB_PASSWORD', 'postgres'),
-        database: configService.get('DB_DATABASE', 'auth_db'),
+        database: configService.get('DB_DATABASE', 'web3_auth_db'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: configService.get('DB_SYNC', true), // 自动创建表 开发环境支持
         logging: configService.get('NODE_ENV') === 'development', // 开发环境启用日志
