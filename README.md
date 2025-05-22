@@ -12,6 +12,29 @@ serverless info --stage staging # 查看部署信息
 - https://dev.to/aws-builders/aws-lambda-cold-starts-the-case-of-a-nestjs-mono-lambda-api-4j42 冷启动
 -
 
+# Redis 是否正常启动
+
+- 本地开发：
+```bash
+# 快速检查
+curl http://localhost:3001/health
+
+# 详细调试
+curl http://localhost:3001/health/detailed
+
+# 只看 Redis
+curl http://localhost:3001/health/redis
+```
+
+- 生产环境监控：
+```bash
+# 监控系统调用
+curl https://your-api.com/health
+
+# 负载均衡器健康检查
+GET /health
+```
+
 # auth.service.ts 代码分析与优化建议
 
 1. Nonce 处理:
