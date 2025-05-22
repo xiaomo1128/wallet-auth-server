@@ -1,23 +1,50 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
 
-  // 配置更宽松的CORS设置
-  app.enableCors({
-    origin: true, // 允许所有来源，开发时使用
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    credentials: true,
-    allowedHeaders: 'Content-Type,Authorization,X-Requested-With',
-  });
+  try {
+    const app = await NestFactory.create(AppModule);
 
-  logger.log('CORS已配置，允许所有来源访问');
+    // 🔥 启动后立即测试 Redis 连接
+    const cacheManager = app.get<Cache>(CACHE_MANAGER);
 
-  const port = process.env.PORT || 3001;
-  await app.listen(port);
-  logger.log(`应用已启动，监听端口: ${port}`);
+    try {
+      // 简单的 ping 测试
+      await cacheManager.set('startup-test', 'redis-works', 1000);
+      const testResult = await cacheManager.get('startup-test');
+      await cacheManager.del('startup-test');
+
+      if (testResult === 'redis-works') {
+        logger.log('✅ Redis 连接测试成功');
+      } else {
+        logger.warn('⚠️ Redis 连接异常：测试值不匹配');
+      }
+    } catch (redisError: unknown) {
+      const errorMessage =
+        redisError instanceof Error ? redisError.message : String(redisError);
+      logger.error('❌ Redis 连接失败:', errorMessage);
+      logger.warn('应用将继续启动，但缓存功能可能无法正常工作');
+    }
+
+    // 启用 CORS（如果需要）
+    app.enableCors();
+
+    const port = process.env.PORT || 3001;
+    await app.listen(port);
+
+    logger.log(`🚀 应用已启动，监听端口: ${port}`);
+  } catch (error) {
+    logger.error('应用启动失败:', error);
+    process.exit(1);
+  }
 }
-bootstrap();
+
+bootstrap().catch((err) => {
+  console.error('Failed to bootstrap application:', err);
+  process.exit(1);
+});

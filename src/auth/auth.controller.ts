@@ -16,8 +16,8 @@ export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Get('nonce')
-  getNonce() {
-    const nonce = this.authService.generateNonce();
+  async getNonce() {
+    const nonce = await this.authService.generateNonce();
     this.logger.debug(`生成新nonce: ${nonce}`);
     return { nonce };
   }

@@ -4,6 +4,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { UserModule } from './user/user.module';
+import { HealthModule } from './health/health.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-redis-store';
@@ -20,11 +21,12 @@ import { redisStore } from 'cache-manager-redis-store';
         type: 'postgres',
         host: configService.get('DB_HOST', 'localhost'),
         port: configService.get('DB_PORT', 5432),
-        username: configService.get('DB_USERNAME', 'postgres'),
-        password: configService.get('DB_PASSWORD', 'postgres'),
+        username: configService.get('DB_USERNAME', 'rainxl'),
+        // password: configService.get('DB_PASSWORD', 'postgres'),
         database: configService.get('DB_DATABASE', 'auth_db'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: configService.get('DB_SYNC', false),
+        synchronize: configService.get('DB_SYNC', true), // 自动创建表 开发环境支持
+        logging: configService.get('NODE_ENV') === 'development', // 开发环境启用日志
       }),
     }),
     CacheModule.register({
@@ -44,6 +46,7 @@ import { redisStore } from 'cache-manager-redis-store';
     }),
     AuthModule,
     UserModule,
+    HealthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

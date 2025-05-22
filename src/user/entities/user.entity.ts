@@ -23,21 +23,21 @@ export class User {
   @Column({ nullable: true })
   email?: string;
 
-  @Column({ default: false })
+  @Column({ default: false, name: 'is_active' })
   isActive: boolean;
 
   @Column({ nullable: true, type: 'json' })
   metadata?: Record<string, any>;
 
-  @Column({ default: 0 })
+  @Column({ default: 0, name: 'login_count' })
   loginCount: number;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, name: 'last_login_at' })
   lastLoginAt?: Date;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

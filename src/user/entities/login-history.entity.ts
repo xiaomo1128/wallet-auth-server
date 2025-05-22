@@ -4,6 +4,7 @@ import {
   PrimaryGeneratedColumn,
   CreateDateColumn,
   ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 import { User } from './user.entity';
 
@@ -12,24 +13,25 @@ export class LoginHistory {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => User)
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column()
+  @Column({ name: 'user_id' })
   userId: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, name: 'ip_address' })
   ipAddress?: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, name: 'user_agent' })
   userAgent?: string;
 
   @Column({ default: true })
   success: boolean;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, name: 'failure_reason' })
   failureReason?: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }
