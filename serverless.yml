@@ -39,7 +39,7 @@ provider:
   # ECR 镜像配置
   ecr:
     images:
-      serverlessWeb3Auth:
+      web3-auth-app:
         platform: linux/arm64
         path: ./
 
@@ -47,21 +47,10 @@ provider:
 functions:
   api:
     image:
-      name: serverlessWeb3Auth
+      name: web3-auth-app
     url: true
     timeout: 30
     memorySize: 512
     reservedConcurrency: 10 # 限制并发，避免过高费用
     events:
       - httpApi: '*'
-
-# 插件配置
-plugins:
-  - serverless-offline
-
-# 自定义配置
-custom:
-  # 本地开发配置
-  serverless-offline:
-    httpPort: 3000
-    noPrependStageInUrl: true
