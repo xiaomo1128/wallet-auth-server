@@ -2,27 +2,66 @@
 service: serverless-web3-auth
 
 provider:
-  name: aws                                # 云服务提供商: AWS
-  region: ap-northeast-1                   # 区域设置: 东京
-  runtime: nodejs20.x                      # 运行环境: Node.js 20.x版本
-  architecture: arm64                      # 处理器架构: ARM64 (更经济高效)
-  stage: ${opt:stage,'staging'}            # 部署环境: 默认为staging环境
+  name: aws
+  region: ap-northeast-1
+  runtime: nodejs20.x
+  architecture: arm64
+  stage: ${opt:stage,'staging'}
+
+  # 环境变量配置
   environment:
+    NODE_ENV: production
     JWT_SECRET: ${env:JWT_SECRET, 'your-default-secret-key'}
     JWT_EXPIRATION: ${env:JWT_EXPIRATION, '24h'}
+    DB_HOST: ${cf:web3-auth-infra-${self:provider.stage}.DatabaseEndpoint}
+    DB_PORT: 5432
+    DB_USERNAME: postgres
+    DB_PASSWORD: ${env:DB_PASSWORD, 'MySecurePassword123!'}
+    DB_DATABASE: web3_auth_db
+    DB_SYNC: true
+    REDIS_HOST: ${cf:web3-auth-infra-${self:provider.stage}.RedisEndpoint}
+    REDIS_PORT: 6379
+    REDIS_PASSWORD: ${env:REDIS_PASSWORD, ''}
+    AWS_REGION: ${self:provider.region}
 
+  # IAM 角色配置
+  iam:
+    role: ${cf:web3-auth-infra-${self:provider.stage}.LambdaExecutionRoleArn}
+
+  # VPC 配置
+  vpc:
+    securityGroupIds:
+      - ${cf:web3-auth-infra-${self:provider.stage}.AppSecurityGroupId}
+    subnetIds:
+      - ${cf:web3-auth-infra-${self:provider.stage}.PrivateSubnet1Id}
+      - ${cf:web3-auth-infra-${self:provider.stage}.PrivateSubnet2Id}
+
+  # ECR 镜像配置
   ecr:
     images:
       serverlessWeb3Auth:
-        # https://docs.aws.amazon.com/lambda/latest/dg/foundation-arch.html
-        # 映像平台: Linux ARM64架构
         platform: linux/arm64
-        # Docker镜像构建路径: 当前目录
         path: ./
 
+# Lambda 函数配置
 functions:
   api:
-    url: true                              # 启用API网关URL
     image:
-      name: serverlessWeb3Auth             # 使用上面定义的容器镜像
-    timeout: 30                            # 函数超时时间: 30秒
+      name: serverlessWeb3Auth
+    url: true
+    timeout: 30
+    memorySize: 512
+    reservedConcurrency: 10 # 限制并发，避免过高费用
+    events:
+      - httpApi: '*'
+
+# 插件配置
+plugins:
+  - serverless-offline
+
+# 自定义配置
+custom:
+  # 本地开发配置
+  serverless-offline:
+    httpPort: 3000
+    noPrependStageInUrl: true
