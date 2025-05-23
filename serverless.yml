@@ -22,7 +22,6 @@ provider:
     REDIS_HOST: ${cf:web3-auth-infra-${self:provider.stage}.RedisEndpoint}
     REDIS_PORT: 6379
     REDIS_PASSWORD: ${env:REDIS_PASSWORD, ''}
-    AWS_REGION: ${self:provider.region}
 
   # IAM 角色配置
   iam:
