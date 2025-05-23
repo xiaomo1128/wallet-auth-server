@@ -50,6 +50,6 @@ functions:
     url: true
     timeout: 30
     memorySize: 512
-    reservedConcurrency: 10 # 限制并发，避免过高费用
+    # 移除 reservedConcurrency 配置以避免并发限制问题
     events:
       - httpApi: '*'
