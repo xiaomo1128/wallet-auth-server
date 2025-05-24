@@ -25,20 +25,26 @@ import { redisStore } from 'cache-manager-redis-store';
         password: configService.get('DB_PASSWORD'),
         database: configService.get('DB_DATABASE', 'web3_auth_db'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: configService.get('DB_SYNC', 'true') === 'true', // 字符串转布尔值
+        synchronize: configService.get('DB_SYNC', 'true') === 'true',
         logging: configService.get('NODE_ENV') === 'development',
 
-        // Aurora Serverless v2 优化配置
+        // 优化连接配置 - 针对 Serverless 环境
         extra: {
-          max: 5, // 最大连接数（Serverless 环境建议较小）
-          min: 1, // 最小连接数
-          idleTimeoutMillis: 30000, // 空闲超时 30秒
-          connectionTimeoutMillis: 10000, // 连接超时 10秒
-          maxUses: 7500, // 连接最大使用次数
-          acquireTimeoutMillis: 10000, // 获取连接超时
+          max: 3, // 减少最大连接数
+          min: 0, // 最小连接数设为0，按需创建
+          idleTimeoutMillis: 15000, // 减少空闲超时到15秒
+          connectionTimeoutMillis: 5000, // 减少连接超时到5秒
+          acquireTimeoutMillis: 5000, // 减少获取连接超时到5秒
+          maxUses: 1000, // 减少连接最大使用次数
+
+          // 添加重试和心跳配置
+          retryAttempts: 3,
+          retryDelay: 1000,
+          keepConnectionAlive: true,
+          dropSchema: false,
         },
 
-        // SSL 配置（Aurora 生产环境必须）
+        // SSL 配置
         ssl:
           configService.get('NODE_ENV') === 'production'
             ? {
@@ -47,7 +53,7 @@ import { redisStore } from 'cache-manager-redis-store';
             : false,
       }),
     }),
-    CacheModule.register({
+    CacheModule.registerAsync({
       isGlobal: true,
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -58,21 +64,50 @@ import { redisStore } from 'cache-manager-redis-store';
         );
         const redisPassword = configService.get<string>('REDIS_PASSWORD', '');
 
-        return {
-          store: await redisStore({
-            socket: {
-              host: redisHost,
-              port: redisPort,
-              connectTimeout: 10000, // 连接超时
-              lazyConnect: true, // 延迟连接
-            },
-            password: redisPassword || undefined, // 空字符串转 undefined
-            ttl: 300 * 1000, // 默认缓存5分钟 (毫秒)
-            retryDelayOnFailover: 100,
-            enableReadyCheck: false,
-            maxRetriesPerRequest: 3,
-          }),
-        };
+        // 如果是生产环境且Redis配置不完整，使用内存缓存作为fallback
+        if (configService.get('NODE_ENV') === 'production' && !redisHost) {
+          console.log('Redis配置不完整，使用内存缓存');
+          return {
+            ttl: 300 * 1000, // 5分钟
+          };
+        }
+
+        try {
+          return {
+            store: await redisStore({
+              socket: {
+                host: redisHost,
+                port: redisPort,
+                connectTimeout: 3000, // 减少连接超时到3秒
+                lazyConnect: true,
+                reconnectOnError: (err) => {
+                  console.log(
+                    'Redis reconnect on error:',
+                    err instanceof Error ? err.message : String(err),
+                  );
+                  return true;
+                },
+              },
+              password: redisPassword || undefined,
+              ttl: 300 * 1000, // 5分钟缓存
+              retryDelayOnFailover: 100,
+              enableReadyCheck: false,
+              maxRetriesPerRequest: 2, // 减少重试次数
+              connectTimeout: 3000,
+              commandTimeout: 2000,
+
+              // 添加错误处理
+              retryDelayOnClusterDown: 300,
+              enableOfflineQueue: false,
+            }),
+          };
+        } catch (error) {
+          console.error('Redis连接失败，降级到内存缓存:', error);
+          // 降级到内存缓存
+          return {
+            ttl: 300 * 1000,
+          };
+        }
       },
     }),
     AuthModule,

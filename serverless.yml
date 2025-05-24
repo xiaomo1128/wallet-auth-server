@@ -1,4 +1,3 @@
-# 服务名称：基于无服务器架构的web3身份验证系统
 service: serverless-web3-auth
 
 provider:
@@ -8,7 +7,6 @@ provider:
   architecture: arm64
   stage: ${opt:stage,'staging'}
 
-  # 环境变量配置
   environment:
     NODE_ENV: production
     JWT_SECRET: ${env:JWT_SECRET, 'your-default-secret-key'}
@@ -23,11 +21,9 @@ provider:
     REDIS_PORT: 6379
     REDIS_PASSWORD: ${env:REDIS_PASSWORD, ''}
 
-  # IAM 角色配置
   iam:
     role: ${cf:web3-auth-infra-${self:provider.stage}.LambdaExecutionRoleArn}
 
-  # VPC 配置
   vpc:
     securityGroupIds:
       - ${cf:web3-auth-infra-${self:provider.stage}.AppSecurityGroupId}
@@ -35,21 +31,18 @@ provider:
       - ${cf:web3-auth-infra-${self:provider.stage}.PrivateSubnet1Id}
       - ${cf:web3-auth-infra-${self:provider.stage}.PrivateSubnet2Id}
 
-  # ECR 镜像配置
   ecr:
     images:
       web3-auth-app:
         platform: linux/arm64
         path: ./
 
-# Lambda 函数配置
 functions:
   api:
     image:
       name: web3-auth-app
     url: true
-    timeout: 30
+    timeout: 29
     memorySize: 512
-    # 移除 reservedConcurrency 配置以避免并发限制问题
     events:
       - httpApi: '*'

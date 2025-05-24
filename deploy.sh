@@ -104,9 +104,14 @@ deploy_infrastructure() {
     
     # 检查栈是否存在
     if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" &> /dev/null; then
-        log_info "更新现有栈: ${STACK_NAME}"
-        aws cloudformation update-stack \
+        log_info "检查栈是否需要更新: ${STACK_NAME}"
+        
+        # 创建变更集来检查是否有更新
+        CHANGE_SET_NAME="changeset-$(date +%s)"
+        
+        if aws cloudformation create-change-set \
             --stack-name "${STACK_NAME}" \
+            --change-set-name "${CHANGE_SET_NAME}" \
             --template-body file://infrastructure.yml \
             --parameters \
                 ParameterKey=Environment,ParameterValue="${STAGE}" \
@@ -114,7 +119,43 @@ deploy_infrastructure() {
                 ParameterKey=JWTSecret,ParameterValue="${JWT_SECRET}" \
                 ParameterKey=RedisPassword,ParameterValue="${REDIS_PASSWORD}" \
             --capabilities CAPABILITY_IAM \
-            --region "${AWS_REGION}"
+            --region "${AWS_REGION}" 2>/dev/null; then
+            
+            # 等待变更集创建完成
+            sleep 5
+            
+            # 检查变更集状态
+            CHANGE_SET_STATUS=$(aws cloudformation describe-change-set \
+                --stack-name "${STACK_NAME}" \
+                --change-set-name "${CHANGE_SET_NAME}" \
+                --region "${AWS_REGION}" \
+                --query 'Status' \
+                --output text 2>/dev/null || echo "FAILED")
+            
+            if [ "${CHANGE_SET_STATUS}" = "CREATE_COMPLETE" ]; then
+                log_info "执行基础设施更新..."
+                aws cloudformation execute-change-set \
+                    --stack-name "${STACK_NAME}" \
+                    --change-set-name "${CHANGE_SET_NAME}" \
+                    --region "${AWS_REGION}"
+                
+                log_info "等待更新完成..."
+                aws cloudformation wait stack-update-complete \
+                    --stack-name "${STACK_NAME}" \
+                    --region "${AWS_REGION}"
+                
+                log_success "基础设施更新完成"
+            else
+                log_info "基础设施无需更新"
+                # 删除无用的变更集
+                aws cloudformation delete-change-set \
+                    --stack-name "${STACK_NAME}" \
+                    --change-set-name "${CHANGE_SET_NAME}" \
+                    --region "${AWS_REGION}" 2>/dev/null || true
+            fi
+        else
+            log_info "基础设施无需更新"
+        fi
     else
         log_info "创建新栈: ${STACK_NAME}"
         aws cloudformation create-stack \
@@ -127,17 +168,14 @@ deploy_infrastructure() {
                 ParameterKey=RedisPassword,ParameterValue="${REDIS_PASSWORD}" \
             --capabilities CAPABILITY_IAM \
             --region "${AWS_REGION}"
+        
+        log_info "等待基础设施部署完成..."
+        aws cloudformation wait stack-create-complete \
+            --stack-name "${STACK_NAME}" \
+            --region "${AWS_REGION}"
+        
+        log_success "基础设施部署完成"
     fi
-    
-    log_info "等待基础设施部署完成..."
-    aws cloudformation wait stack-create-complete \
-        --stack-name "${STACK_NAME}" \
-        --region "${AWS_REGION}" || \
-    aws cloudformation wait stack-update-complete \
-        --stack-name "${STACK_NAME}" \
-        --region "${AWS_REGION}"
-    
-    log_success "基础设施部署完成"
 }
 
 # 安装依赖

@@ -1,0 +1,18 @@
+[
+    {
+        "ParameterKey": "Environment",
+        "ParameterValue": "staging"
+    },
+    {
+        "ParameterKey": "DBPassword",
+        "ParameterValue": "MySecurePassword123!"
+    },
+    {
+        "ParameterKey": "JWTSecret",
+        "ParameterValue": "your-super-secret-jwt-key-here"
+    },
+    {
+        "ParameterKey": "RedisPassword", 
+        "ParameterValue": "your-redis-password-here"
+    }
+]
